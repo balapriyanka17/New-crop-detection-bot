@@ -6,12 +6,8 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"; // paste your NEW key here
-const TWILIO_ACCOUNT_SID = "YOUR_TWILIO_ACCOUNT_SID"; // from twilio.com/console
-const TWILIO_AUTH_TOKEN  = "YOUR_TWILIO_AUTH_TOKEN";  // from twilio.com/console
-const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886"; // Twilio sandbox number
-
-const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886";
 
 const SYSTEM_PROMPT = `You are a Crop Disease Specialist for Tamil Nadu KVK – Salem, Mettur, and Attur regions.
 
@@ -75,6 +71,10 @@ app.post("/webhook", async (req, res) => {
   const from = req.body.From;
   const mediaUrl = req.body.MediaUrl0;
   const mediaType = req.body.MediaContentType0 || "image/jpeg";
+
+  const sid   = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const client = twilio(sid, token);
 
   const sendMsg = async (text) => {
     await client.messages.create({
