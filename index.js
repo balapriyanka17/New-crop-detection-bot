@@ -134,8 +134,9 @@ app.post("/webhook", async (req, res) => {
     }
 
   } catch (err) {
-    console.error(err.message);
-    await sendMsg("❌ பகுப்பாய்வு தோல்வியடைந்தது. தெளிவான படத்தை மீண்டும் அனுப்பவும்.\n\nAnalysis failed. Please send a clearer photo and try again.");
+    console.error("FULL ERROR:", JSON.stringify(err?.response?.data || err.message));
+    const errMsg = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
+    await sendMsg(`❌ Analysis failed. Error: ${errMsg}\n\nPlease try again.`);
   }
 });
 
