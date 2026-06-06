@@ -143,4 +143,10 @@ app.post("/webhook", async (req, res) => {
 app.get("/", (req, res) => res.send("KVK Crop Bot is running 🌾"));
 
 const PORT = process.env.PORT || 8080;
+
+// Startup check - log all env vars (masked)
+console.log("ENV CHECK:");
+console.log("TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID ? process.env.TWILIO_ACCOUNT_SID.substring(0,6) + "..." : "NOT SET");
+console.log("TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "SET" : "NOT SET");
+console.log("ANTHROPIC_API_KEY:", process.env.ANTHROPIC_API_KEY ? "SET" : "NOT SET");
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
