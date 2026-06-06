@@ -72,8 +72,18 @@ app.post("/webhook", async (req, res) => {
   const mediaUrl = req.body.MediaUrl0;
   const mediaType = req.body.MediaContentType0 || "image/jpeg";
 
-  const sid   = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
+  const sid   = process.env.TWILIO_ACCOUNT_SID || "";
+  const token = process.env.TWILIO_AUTH_TOKEN || "";
+
+  console.log("WEBHOOK - SID available:", sid ? sid.substring(0,6) : "EMPTY");
+
+  if (!sid || !token) {
+    console.error("Missing Twilio credentials in webhook");
+    res.set("Content-Type", "text/xml");
+    res.send("<Response></Response>");
+    return;
+  }
+
   const client = twilio(sid, token);
 
   const sendMsg = async (text) => {
@@ -98,7 +108,7 @@ app.post("/webhook", async (req, res) => {
 
     // Download image from Twilio (needs auth)
     const imgResp = await axios.get(mediaUrl, {
-      auth: { username: TWILIO_ACCOUNT_SID, password: TWILIO_AUTH_TOKEN },
+      auth: { username: sid, password: token },
       responseType: "arraybuffer"
     });
     const b64 = Buffer.from(imgResp.data).toString("base64");
