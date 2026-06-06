@@ -141,5 +141,5 @@ app.post("/webhook", async (req, res) => {
 
 app.get("/", (req, res) => res.send("KVK Crop Bot is running 🌾"));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
