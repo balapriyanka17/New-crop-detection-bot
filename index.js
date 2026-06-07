@@ -34,7 +34,7 @@ function sendMessage(chatId, text) {
 function callGemini(b64, mime, retries) {
   console.log("Calling Gemini, retries left:", retries);
   return axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=" + GEMINI_KEY,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY,
     {
       contents: [{ parts: [
         { inline_data: { mime_type: mime, data: b64 } },
