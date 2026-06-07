@@ -118,7 +118,7 @@ app.post("/webhook", async (req, res) => {
 
     console.log("Calling Gemini API...");
     const geminiResp = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
       {
         system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents: [{
