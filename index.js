@@ -6,7 +6,6 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886";
 
 const SYSTEM_PROMPT = `You are a Crop Disease Specialist for Tamil Nadu KVK – Salem, Mettur, and Attur regions.
@@ -21,7 +20,7 @@ DISTRICT CONTEXT:
 - Mettur: irrigation zones, sheath blight common
 - Attur: alluvial, mosaic virus from whitefly in dry spells
 
-Analyse the crop image and respond ONLY in this JSON format (no markdown, no code fences):
+Analyse the crop image and respond ONLY in this JSON format (no markdown, no code fences, raw JSON only):
 {
   "disease": "Disease name",
   "severity": "Early | Moderate | Severe",
@@ -74,13 +73,17 @@ app.post("/webhook", async (req, res) => {
 
   const sid   = process.env.TWILIO_ACCOUNT_SID || "";
   const token = process.env.TWILIO_AUTH_TOKEN || "";
+  const geminiKey = process.env.GEMINI_API_KEY || "";
 
-  console.log("WEBHOOK - SID available:", sid ? sid.substring(0,6) : "EMPTY");
+  console.log("WEBHOOK - SID:", sid ? sid.substring(0,6) : "EMPTY");
+  console.log("GEMINI_API_KEY:", geminiKey ? "SET" : "NOT SET");
+
+  // Respond immediately to Twilio
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
 
   if (!sid || !token) {
-    console.error("Missing Twilio credentials in webhook");
-    res.set("Content-Type", "text/xml");
-    res.send("<Response></Response>");
+    console.error("Missing Twilio credentials");
     return;
   }
 
@@ -94,10 +97,6 @@ app.post("/webhook", async (req, res) => {
     });
   };
 
-  // Respond immediately to Twilio
-  res.set("Content-Type", "text/xml");
-  res.send("<Response></Response>");
-
   if (!mediaUrl) {
     await sendMsg("🌾 வணக்கம்! பயிர் நோய் படத்தை அனுப்பவும்.\n\nHello! Please send a photo of your diseased crop for analysis.");
     return;
@@ -106,34 +105,37 @@ app.post("/webhook", async (req, res) => {
   try {
     await sendMsg("🔍 உங்கள் படம் பகுப்பாய்வு செய்யப்படுகிறது... சிறிது நேரம் காத்திருங்கள்.\n\nAnalysing your crop image, please wait...");
 
-    // Download image from Twilio (needs auth)
+    console.log("Downloading image from Twilio...");
     const imgResp = await axios.get(mediaUrl, {
       auth: { username: sid, password: token },
-      responseType: "arraybuffer"
+      responseType: "arraybuffer",
+      timeout: 30000
     });
+
     const b64 = Buffer.from(imgResp.data).toString("base64");
+    const detectedType = imgResp.headers["content-type"] || mediaType;
+    console.log("Image downloaded, type:", detectedType, "size:", imgResp.data.byteLength);
 
-    // Call Anthropic API
-    const aiResp = await axios.post("https://api.anthropic.com/v1/messages", {
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: b64 } },
-          { type: "text", text: "Analyse this crop image for disease." }
-        ]
-      }]
-    }, {
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-      }
-    });
+    console.log("Calling Gemini API...");
+    const geminiResp = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [{
+          parts: [
+            { inline_data: { mime_type: detectedType, data: b64 } },
+            { text: "Analyse this crop image for disease. Respond in JSON only." }
+          ]
+        }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 }
+      },
+      { timeout: 60000 }
+    );
 
-    const raw = aiResp.data.content?.find(b => b.type === "text")?.text || "";
+    console.log("Gemini responded");
+    const raw = geminiResp.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    console.log("Raw response:", raw.substring(0, 200));
+
     const cleaned = raw.replace(/```json|```/g, "").trim();
     const result = JSON.parse(cleaned);
 
@@ -146,17 +148,17 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("FULL ERROR:", JSON.stringify(err?.response?.data || err.message));
     const errMsg = err?.response?.data ? JSON.stringify(err.response.data) : err.message;
-    await sendMsg(`❌ Analysis failed. Error: ${errMsg}\n\nPlease try again.`);
+    await sendMsg(`❌ Analysis failed. Error: ${errMsg}`);
   }
 });
+
+// Startup env check
+console.log("ENV CHECK:");
+console.log("TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID ? process.env.TWILIO_ACCOUNT_SID.substring(0,6) + "..." : "NOT SET");
+console.log("TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "SET" : "NOT SET");
+console.log("GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "SET" : "NOT SET");
 
 app.get("/", (req, res) => res.send("KVK Crop Bot is running 🌾"));
 
 const PORT = process.env.PORT || 8080;
-
-// Startup check - log all env vars (masked)
-console.log("ENV CHECK:");
-console.log("TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID ? process.env.TWILIO_ACCOUNT_SID.substring(0,6) + "..." : "NOT SET");
-console.log("TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "SET" : "NOT SET");
-console.log("ANTHROPIC_API_KEY:", process.env.ANTHROPIC_API_KEY ? "SET" : "NOT SET");
 app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
