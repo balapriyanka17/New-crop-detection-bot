@@ -35,6 +35,7 @@ function sendMsg(chatId, text) {
 
 function callOpenRouter(b64, mime, tries) {
   console.log("Calling OpenRouter, tries left:", tries);
+  console.log("Using key starting with:", OPENROUTER_KEY.substring(0, 10));
   return axios.post(
     "https://openrouter.ai/api/v1/chat/completions",
     {
@@ -50,7 +51,7 @@ function callOpenRouter(b64, mime, tries) {
     },
     {
       headers: {
-        "Authorization": "Bearer " + OPENROUTER_KEY,
+        "Authorization": "Bearer " + OPENROUTER_KEY.trim(),
         "Content-Type": "application/json",
         "HTTP-Referer": "https://kvk-crop-bot.railway.app",
         "X-Title": "KVK Crop Bot"
