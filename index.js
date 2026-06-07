@@ -2,120 +2,126 @@ const express = require("express");
 const axios = require("axios");
 const twilio = require("twilio");
 
+process.on("uncaughtException", (err) => console.error("Uncaught:", err.message));
+process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-process.on("uncaughtException", (err) => console.error("Uncaught:", err.message));
-process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
+console.log("Starting KVK Bot...");
+console.log("TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID ? "SET" : "NOT SET");
+console.log("TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "SET" : "NOT SET");
+console.log("GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "SET" : "NOT SET");
 
-const TWILIO_WHATSAPP_NUMBER = "whatsapp:+14155238886";
+const SANDBOX_NUMBER = "whatsapp:+14155238886";
 
-const PROMPT = `You are a Crop Disease Specialist for Tamil Nadu KVK – Salem, Mettur, and Attur regions.
-Crops: Paddy (blast, sheath blight, brown spot, tungro virus, stem borer), Turmeric (leaf blotch, rhizome rot, leaf spot, thrips), Tapioca (mosaic virus, bacterial blight, mealybug, whitefly).
-Respond ONLY in raw JSON, no markdown, no code fences:
-{"disease":"...","severity":"Early|Moderate|Severe","affected_part":"...","likely_cause":"Fungal|Bacterial|Viral|Pest","root_cause":"...","chemical_treatment":"...","chemical_cost":"INR per acre","organic_treatment":"...","organic_cost":"INR per acre","prevention":"3 tips","tamil_disease":"...","tamil_solution":"...","tamil_prevention":"...","tamil_warning":"..."}`;
+const PROMPT = "You are a crop disease specialist for Tamil Nadu KVK. Analyse the crop image and respond ONLY in raw JSON with these fields: disease, severity (Early/Moderate/Severe), affected_part, likely_cause (Fungal/Bacterial/Viral/Pest), root_cause, chemical_treatment, chemical_cost, organic_treatment, organic_cost, prevention, tamil_disease, tamil_solution, tamil_prevention, tamil_warning. No markdown, no code fences, just raw JSON.";
 
-function truncate(str, n) {
-  return str && str.length > n ? str.substring(0, n) + "..." : str;
+function trim(str, n) {
+  if (!str) return "";
+  return str.length > n ? str.substring(0, n) + "..." : str;
 }
 
-function formatReply(r) {
-  const msg1 = `🌾 *KVK நோய் அறிக்கை*
-நோய்: ${r.disease} (${r.severity})
-பாதிப்பு: ${r.affected_part} | ${r.likely_cause}
-காரணம்: ${truncate(r.root_cause, 120)}`;
-
-  const msg2 = `🧪 Chemical: ${truncate(r.chemical_treatment, 120)}
-💰 ~${r.chemical_cost}/acre
-
-🌿 Organic: ${truncate(r.organic_treatment, 120)}
-💰 ~${r.organic_cost}/acre
-
-🛡️ Prevention: ${truncate(r.prevention, 150)}`;
-
-  const msg3 = `🗣️ Tamil Advisory
-நோய்: ${r.tamil_disease}
-தீர்வு: ${truncate(r.tamil_solution, 150)}
-அடுத்த பருவம்: ${truncate(r.tamil_prevention, 100)}
-⚠️ ${truncate(r.tamil_warning, 100)}
-_KVK Salem · Mettur · Attur_`;
-
-  return [msg1, msg2, msg3];
-}
-
-app.get("/", (req, res) => {
-  console.log("Health check hit");
-  res.send("KVK Crop Bot is running 🌾");
+app.get("/", function(req, res) {
+  res.send("KVK Crop Bot is running");
 });
 
-app.post("/webhook", (req, res) => {
-  console.log("Webhook received");
+app.post("/webhook", function(req, res) {
+  console.log("Webhook hit");
   res.set("Content-Type", "text/xml");
   res.send("<Response></Response>");
-  handleMessage(req.body).catch(e => console.error("Handler error:", e.message));
+  processMessage(req.body);
 });
 
-async function handleMessage(body) {
-  const from = body.From;
-  const mediaUrl = body.MediaUrl0;
-  const mediaType = body.MediaContentType0 || "image/jpeg";
-
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const geminiKey = process.env.GEMINI_API_KEY;
+function processMessage(body) {
+  var from = body.From;
+  var mediaUrl = body.MediaUrl0;
+  var mediaType = body.MediaContentType0 || "image/jpeg";
+  var sid = process.env.TWILIO_ACCOUNT_SID;
+  var token = process.env.TWILIO_AUTH_TOKEN;
+  var geminiKey = process.env.GEMINI_API_KEY;
 
   console.log("From:", from);
-  console.log("MediaUrl:", mediaUrl || "NONE");
+  console.log("Media:", mediaUrl || "none");
 
-  const client = twilio(sid, token);
-  const send = (text) => client.messages.create({ from: TWILIO_WHATSAPP_NUMBER, to: from, body: text });
+  var client = twilio(sid, token);
+
+  function send(text) {
+    return client.messages.create({
+      from: SANDBOX_NUMBER,
+      to: from,
+      body: text
+    });
+  }
 
   if (!mediaUrl) {
-    await send("🌾 வணக்கம்! பயிர் நோய் படத்தை அனுப்பவும்.\nPlease send a crop disease photo.");
+    send("Hello! Please send a photo of your diseased crop. பயிர் நோய் படத்தை அனுப்பவும்.");
     return;
   }
 
-  await send("🔍 பகுப்பாய்வு செய்கிறோம்... 20 seconds ஆகலாம்.\nAnalysing, please wait...");
+  send("Analysing your crop image... please wait 20-30 seconds.")
+    .then(function() {
+      return axios.get(mediaUrl, {
+        auth: { username: sid, password: token },
+        responseType: "arraybuffer",
+        timeout: 30000
+      });
+    })
+    .then(function(imgResp) {
+      console.log("Image downloaded:", imgResp.data.byteLength, "bytes");
+      var b64 = Buffer.from(imgResp.data).toString("base64");
+      var mime = imgResp.headers["content-type"] || mediaType;
 
-  console.log("Downloading image...");
-  const imgResp = await axios.get(mediaUrl, {
-    auth: { username: sid, password: token },
-    responseType: "arraybuffer",
-    timeout: 30000
-  });
-  console.log("Image size:", imgResp.data.byteLength);
+      console.log("Calling Gemini...");
+      return axios.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiKey,
+        {
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: mime, data: b64 } },
+              { text: PROMPT }
+            ]
+          }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+        },
+        { timeout: 55000 }
+      );
+    })
+    .then(function(geminiResp) {
+      console.log("Gemini responded");
+      var raw = "";
+      try {
+        raw = geminiResp.data.candidates[0].content.parts[0].text;
+      } catch(e) {
+        console.error("Parse error:", e.message);
+      }
+      console.log("Raw:", raw.substring(0, 100));
+      var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
+      var result = JSON.parse(cleaned);
 
-  const b64 = Buffer.from(imgResp.data).toString("base64");
-  const mimeType = imgResp.headers["content-type"] || mediaType;
-
-  console.log("Calling Gemini...");
-  const geminiResp = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
-    {
-      system_instruction: { parts: [{ text: PROMPT }] },
-      contents: [{ parts: [
-        { inline_data: { mime_type: mimeType, data: b64 } },
-        { text: "Analyse this crop disease image. JSON only." }
-      ]}],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
-    },
-    { timeout: 55000 }
-  );
-
-  console.log("Gemini done");
-  const raw = geminiResp.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  console.log("Raw:", raw.substring(0, 150));
-
-  const cleaned = raw.replace(/```json|```/g, "").trim();
-  const result = JSON.parse(cleaned);
-
-  if (result.error) {
-    await send("❌ " + result.error);
-  } else {
-    await send(formatReply(result));
-  }
+      return send("🌾 Disease: " + result.disease + "\nSeverity: " + result.severity + "\nPart: " + result.affected_part + "\nCause: " + result.likely_cause + "\n\nReason: " + trim(result.root_cause, 120))
+        .then(function() {
+          return new Promise(function(r) { setTimeout(r, 1000); });
+        })
+        .then(function() {
+          return send("🧪 Chemical: " + trim(result.chemical_treatment, 130) + "\nCost: ~" + result.chemical_cost + "/acre\n\n🌿 Organic: " + trim(result.organic_treatment, 130) + "\nCost: ~" + result.organic_cost + "/acre\n\nPrevention: " + trim(result.prevention, 150));
+        })
+        .then(function() {
+          return new Promise(function(r) { setTimeout(r, 1000); });
+        })
+        .then(function() {
+          return send("நோய்: " + result.tamil_disease + "\nதீர்வு: " + trim(result.tamil_solution, 150) + "\nஅடுத்த பருவம்: " + trim(result.tamil_prevention, 100) + "\nஎச்சரிக்கை: " + trim(result.tamil_warning, 100));
+        });
+    })
+    .catch(function(err) {
+      console.error("Error:", err.message);
+      if (err.response) console.error("Response:", JSON.stringify(err.response.data));
+      send("Analysis failed. Please send a clearer photo and try again.");
+    });
 }
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+var PORT = process.env.PORT || 8080;
+app.listen(PORT, function() {
+  console.log("Bot running on port " + PORT);
+});
