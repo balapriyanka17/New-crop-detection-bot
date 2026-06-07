@@ -143,9 +143,11 @@ axios.post(TELEGRAM + "/deleteWebhook")
   });
 
 function poll(offset) {
+  console.log("Polling with offset:", offset);
   axios.get(TELEGRAM + "/getUpdates?timeout=30&offset=" + offset)
     .then(function(resp) {
       var updates = resp.data.result || [];
+      console.log("Updates received:", updates.length);
       var nextOffset = offset;
 
       updates.forEach(function(update) {
