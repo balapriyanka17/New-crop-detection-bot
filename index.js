@@ -7,7 +7,8 @@ process.on("unhandledRejection", function(err) { console.error("Unhandled:", err
 const app = express();
 app.use(express.json());
 
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8971652258:AAEKGzC3Wz8zu9062QuqUSiYdIBdQ_ETlVs";
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const TELEGRAM_API = "https://api.telegram.org/bot" + TOKEN;
 
