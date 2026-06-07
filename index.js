@@ -6,16 +6,16 @@ process.on("unhandledRejection", function(err) { console.error("Unhandled:", err
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
 const TELEGRAM = "https://api.telegram.org/bot" + TOKEN;
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_KEY;
 
 console.log("Starting KVK Bot...");
 console.log("TOKEN:", TOKEN ? "SET" : "MISSING");
 console.log("GEMINI:", GEMINI_KEY ? "SET" : "MISSING");
 
-const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur regions. Analyse this crop image. Reply ONLY in raw JSON, no markdown, no code fences: {\"disease\":\"\",\"severity\":\"Early or Moderate or Severe\",\"affected_part\":\"\",\"likely_cause\":\"Fungal or Bacterial or Viral or Pest\",\"root_cause\":\"\",\"chemical_treatment\":\"\",\"chemical_cost\":\"\",\"organic_treatment\":\"\",\"organic_cost\":\"\",\"prevention\":\"\",\"tamil_disease\":\"\",\"tamil_solution\":\"\",\"tamil_prevention\":\"\",\"tamil_warning\":\"\"}";
+const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur. Analyse this crop image. Reply ONLY as a raw JSON object with these exact fields: disease, severity (Early or Moderate or Severe), affected_part, likely_cause (Fungal or Bacterial or Viral or Pest), root_cause, chemical_treatment, chemical_cost, organic_treatment, organic_cost, prevention, tamil_disease, tamil_solution, tamil_prevention, tamil_warning. No markdown. No code fences. Just the JSON.";
 
 var queue = [];
 var processing = false;
-var lastGeminiCall = 0;
 
 function trim(str, max) {
   if (!str) return "-";
@@ -34,74 +34,72 @@ function sendMsg(chatId, text) {
   }).catch(function(e) { console.error("sendMsg error:", e.message); });
 }
 
-function getFileUrl(fileId) {
-  return axios.get(TELEGRAM + "/getFile?file_id=" + fileId)
-    .then(function(r) {
-      return "https://api.telegram.org/file/bot" + TOKEN + "/" + r.data.result.file_path;
-    });
+function callGemini(b64, mime, tries) {
+  console.log("Calling Gemini, tries left:", tries);
+  return axios.post(GEMINI_URL, {
+    contents: [{ parts: [
+      { inline_data: { mime_type: mime, data: b64 } },
+      { text: PROMPT }
+    ]}],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+  }, { timeout: 60000 })
+  .catch(function(err) {
+    var code = err.response ? err.response.status : 0;
+    var msg = err.response ? JSON.stringify(err.response.data) : err.message;
+    console.error("Gemini error", code, ":", msg.substring(0, 200));
+    if ((code === 429 || code === 503) && tries > 0) {
+      console.log("Waiting 90s before retry...");
+      return sleep(90000).then(function() { return callGemini(b64, mime, tries - 1); });
+    }
+    throw new Error("Gemini failed: " + code + " " + msg.substring(0, 100));
+  });
 }
 
-function processQueue() {
+function processNext() {
   if (processing || queue.length === 0) return;
   processing = true;
   var job = queue.shift();
-  console.log("Processing job for:", job.chatId, "Queue remaining:", queue.length);
+  console.log("Processing for:", job.chatId, "| Queue left:", queue.length);
 
-  // Enforce 65 second gap between Gemini calls
-  var now = Date.now();
-  var wait = Math.max(0, 90000 - (now - lastGeminiCall));
-  if (wait > 0) {
-    console.log("Waiting", wait, "ms before Gemini call...");
-  }
-
-  sendMsg(job.chatId, "Analysing your crop image... please wait.\nபகுப்பாய்வு செய்கிறோம்...")
-    .then(function() { return sleep(wait); })
-    .then(function() { return getFileUrl(job.fileId); })
-    .then(function(url) {
+  axios.get(TELEGRAM + "/getFile?file_id=" + job.fileId)
+    .then(function(r) {
+      var url = "https://api.telegram.org/file/bot" + TOKEN + "/" + r.data.result.file_path;
       console.log("Downloading:", url);
       return axios.get(url, { responseType: "arraybuffer", timeout: 30000 });
     })
     .then(function(imgResp) {
-      var b64 = Buffer.from(imgResp.data).toString("base64");
       var mime = imgResp.headers["content-type"] || "image/jpeg";
       if (mime === "application/octet-stream") mime = "image/jpeg";
-      console.log("Downloaded:", imgResp.data.byteLength, "bytes");
-      lastGeminiCall = Date.now();
-      return axios.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=" + GEMINI_KEY,
-        {
-          contents: [{ parts: [
-            { inline_data: { mime_type: mime, data: b64 } },
-            { text: PROMPT }
-          ]}],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
-        },
-        { timeout: 60000 }
-      );
+      var b64 = Buffer.from(imgResp.data).toString("base64");
+      console.log("Image ready:", imgResp.data.byteLength, "bytes, mime:", mime);
+      return callGemini(b64, mime, 5);
     })
     .then(function(resp) {
-      console.log("Gemini success");
       var raw = resp.data.candidates[0].content.parts[0].text || "";
+      console.log("Gemini raw:", raw.substring(0, 200));
       var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
       var r = JSON.parse(cleaned);
 
-      var m1 = "KVK Crop Disease Report\n" +
+      var m1 =
+        "KVK Crop Disease Report\n" +
         "Disease: " + trim(r.disease, 50) + "\n" +
         "Severity: " + trim(r.severity, 20) + "\n" +
         "Affected: " + trim(r.affected_part, 40) + "\n" +
         "Cause: " + trim(r.likely_cause, 20) + "\n\n" +
         "Reason:\n" + trim(r.root_cause, 400);
 
-      var m2 = "Treatment\n\n" +
+      var m2 =
+        "Treatment\n\n" +
         "Chemical:\n" + trim(r.chemical_treatment, 250) + "\n" +
         "Cost: " + trim(r.chemical_cost, 50) + "\n\n" +
         "Organic:\n" + trim(r.organic_treatment, 250) + "\n" +
         "Cost: " + trim(r.organic_cost, 50) + "\n\n" +
         "Prevention:\n" + trim(r.prevention, 300);
 
-      var m3 = "Tamil Advisory\n\n" +
+      var m3 =
+        "Tamil Advisory\n\n" +
         "Noi: " + trim(r.tamil_disease, 80) + "\n\n" +
-        "Theervу:\n" + trim(r.tamil_solution, 350) + "\n\n" +
+        "Theervu:\n" + trim(r.tamil_solution, 350) + "\n\n" +
         "Adhutha Paruvam:\n" + trim(r.tamil_prevention, 250) + "\n\n" +
         "Echagarikkai:\n" + trim(r.tamil_warning, 250);
 
@@ -112,53 +110,55 @@ function processQueue() {
         .then(function() { return sendMsg(job.chatId, m3); });
     })
     .catch(function(err) {
-      console.error("Job error:", err.message);
-      sendMsg(job.chatId, "Analysis failed. Please try again in 1 minute.");
+      console.error("Job failed:", err.message);
+      sendMsg(job.chatId, "Analysis failed: " + err.message.substring(0, 100) + "\n\nPlease wait 2 minutes and try again.");
     })
     .then(function() {
       processing = false;
-      processQueue();
+      if (queue.length > 0) {
+        console.log("Next job in 90 seconds...");
+        sleep(90000).then(processNext);
+      }
     });
 }
-
-axios.post(TELEGRAM + "/deleteWebhook?drop_pending_updates=true")
-  .then(function() {
-    console.log("Webhook deleted. Starting polling...");
-    setTimeout(function() { poll(0); }, 3000);
-  })
-  .catch(function() { setTimeout(function() { poll(0); }, 3000); });
 
 function poll(offset) {
   axios.get(TELEGRAM + "/getUpdates?timeout=30&offset=" + offset)
     .then(function(resp) {
       var updates = resp.data.result || [];
-      var nextOffset = offset;
-
-      updates.forEach(function(update) {
-        nextOffset = update.update_id + 1;
-        var msg = update.message;
+      var next = offset;
+      updates.forEach(function(u) {
+        next = u.update_id + 1;
+        var msg = u.message;
         if (!msg) return;
         var chatId = msg.chat.id;
-
         if (msg.photo) {
           var fileId = msg.photo[msg.photo.length - 1].file_id;
           queue.push({ chatId: chatId, fileId: fileId });
-          console.log("Queued photo from:", chatId, "Queue size:", queue.length);
-          sendMsg(chatId, "Photo received! Position in queue: " + queue.length + "\nபடம் பெறப்பட்டது!");
-          processQueue();
+          console.log("Photo queued from:", chatId, "| Queue:", queue.length);
+          sendMsg(chatId, "Photo received! Analysing now...\nபடம் பெறப்பட்டது! பகுப்பாய்வு செய்கிறோம்...");
+          processNext();
         } else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith("image/")) {
           queue.push({ chatId: chatId, fileId: msg.document.file_id });
-          processQueue();
+          sendMsg(chatId, "Photo received! Analysing now...\nபடம் பெறப்பட்டது!");
+          processNext();
         } else {
           sendMsg(chatId, "Hello! Send a photo of your diseased crop.\nபயிர் நோய் படத்தை அனுப்பவும்.");
         }
       });
-
-      poll(nextOffset);
+      poll(next);
     })
     .catch(function(e) {
       console.error("Poll error:", e.message);
-      var retryDelay = e.response && e.response.status === 409 ? 10000 : 5000;
-      setTimeout(function() { poll(offset); }, retryDelay);
+      setTimeout(function() { poll(offset); }, e.response && e.response.status === 409 ? 15000 : 5000);
     });
 }
+
+axios.post(TELEGRAM + "/deleteWebhook?drop_pending_updates=true")
+  .then(function() {
+    console.log("Webhook deleted. Polling starts in 3s...");
+    setTimeout(function() { poll(0); }, 3000);
+  })
+  .catch(function() {
+    setTimeout(function() { poll(0); }, 3000);
+  });
