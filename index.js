@@ -1,152 +1,175 @@
-const express = require("express");
 const axios = require("axios");
 
 process.on("uncaughtException", function(err) { console.error("Uncaught:", err.message); });
 process.on("unhandledRejection", function(err) { console.error("Unhandled:", err); });
 
-const app = express();
-app.use(express.json());
-
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const TELEGRAM_API = "https://api.telegram.org/bot" + TOKEN;
+const TELEGRAM = "https://api.telegram.org/bot" + TOKEN;
 
-const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur. Analyse the crop image. Reply ONLY in raw JSON (no markdown, no code fences): {\"disease\":\"\",\"severity\":\"Early|Moderate|Severe\",\"affected_part\":\"\",\"likely_cause\":\"Fungal|Bacterial|Viral|Pest\",\"root_cause\":\"\",\"chemical_treatment\":\"\",\"chemical_cost\":\"\",\"organic_treatment\":\"\",\"organic_cost\":\"\",\"prevention\":\"\",\"tamil_disease\":\"\",\"tamil_solution\":\"\",\"tamil_prevention\":\"\",\"tamil_warning\":\"\"}";
+console.log("Starting KVK Bot...");
+console.log("TOKEN:", TOKEN ? "SET" : "MISSING");
+console.log("GEMINI:", GEMINI_KEY ? "SET" : "MISSING");
 
-function t(str, max) {
+const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur regions. Analyse this crop image carefully. Reply ONLY in raw JSON with no markdown, no code fences, just the JSON object: {\"disease\":\"\",\"severity\":\"Early or Moderate or Severe\",\"affected_part\":\"\",\"likely_cause\":\"Fungal or Bacterial or Viral or Pest\",\"root_cause\":\"\",\"chemical_treatment\":\"\",\"chemical_cost\":\"\",\"organic_treatment\":\"\",\"organic_cost\":\"\",\"prevention\":\"\",\"tamil_disease\":\"\",\"tamil_solution\":\"\",\"tamil_prevention\":\"\",\"tamil_warning\":\"\"}";
+
+function trim(str, max) {
   if (!str) return "-";
   str = String(str);
   return str.length > max ? str.substring(0, max - 3) + "..." : str;
 }
 
-function delay(ms) {
+function sleep(ms) {
   return new Promise(function(r) { setTimeout(r, ms); });
 }
 
-function sendMessage(chatId, text) {
-  var safe = text.substring(0, 4000);
-  console.log("Sending msg length:", safe.length);
-  return axios.post(TELEGRAM_API + "/sendMessage", {
+function sendMsg(chatId, text) {
+  return axios.post(TELEGRAM + "/sendMessage", {
     chat_id: chatId,
-    text: safe
-  }).catch(function(e) { console.error("Send error:", e.message); });
+    text: text.substring(0, 4000)
+  }).then(function() {
+    console.log("Sent to", chatId);
+  }).catch(function(e) {
+    console.error("sendMsg error:", e.message);
+  });
 }
 
-function callGemini(b64, mime, retries) {
-  console.log("Calling Gemini, retries left:", retries);
+function getFile(fileId) {
+  return axios.get(TELEGRAM + "/getFile?file_id=" + fileId)
+    .then(function(r) {
+      return "https://api.telegram.org/file/bot" + TOKEN + "/" + r.data.result.file_path;
+    });
+}
+
+function downloadImage(url) {
+  return axios.get(url, { responseType: "arraybuffer", timeout: 30000 })
+    .then(function(r) {
+      return {
+        b64: Buffer.from(r.data).toString("base64"),
+        mime: r.headers["content-type"] || "image/jpeg",
+        size: r.data.byteLength
+      };
+    });
+}
+
+function callGemini(b64, mime, tries) {
+  console.log("Gemini call, tries left:", tries);
   return axios.post(
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_KEY,
     {
-      contents: [{ parts: [
-        { inline_data: { mime_type: mime, data: b64 } },
-        { text: PROMPT }
-      ]}],
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mime, data: b64 } },
+          { text: PROMPT }
+        ]
+      }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
     },
     { timeout: 60000 }
   ).catch(function(err) {
-    var status = err.response ? err.response.status : 0;
-    console.error("Gemini error:", status, err.message);
-    if (status === 429 && retries > 0) {
-      console.log("Rate limited. Waiting 60 seconds...");
-      return delay(60000).then(function() {
-        return callGemini(b64, mime, retries - 1);
-      });
+    var code = err.response ? err.response.status : 0;
+    console.error("Gemini error code:", code, err.message);
+    if (code === 429 && tries > 0) {
+      console.log("Rate limit hit. Waiting 60s...");
+      return sleep(60000).then(function() { return callGemini(b64, mime, tries - 1); });
+    }
+    if (tries > 0) {
+      console.log("Retrying in 10s...");
+      return sleep(10000).then(function() { return callGemini(b64, mime, tries - 1); });
     }
     throw err;
   });
 }
 
-app.get("/", function(req, res) {
-  res.send("KVK Crop Bot running");
-});
-
-app.post("/webhook", function(req, res) {
-  res.sendStatus(200);
-  var msg = req.body.message;
-  if (!msg) return;
-
-  var chatId = msg.chat.id;
-  var photo = msg.photo;
-  var document = msg.document;
-
-  console.log("Message from:", chatId);
-
-  if (!photo && !document) {
-    sendMessage(chatId, "Hello! Send a photo of your diseased crop.\nபயிர் நோய் படத்தை அனுப்பவும்.");
-    return;
-  }
-
-  var fileId, mime;
-  if (photo) {
-    fileId = photo[photo.length - 1].file_id;
-    mime = "image/jpeg";
-  } else {
-    fileId = document.file_id;
-    mime = document.mime_type || "image/jpeg";
-  }
-
-  sendMessage(chatId, "Analysing your crop image... please wait up to 60 seconds.\nபகுப்பாய்வு செய்கிறோம்...")
-    .then(function() {
-      return axios.get(TELEGRAM_API + "/getFile?file_id=" + fileId);
+function handlePhoto(chatId, fileId) {
+  sendMsg(chatId, "Analysing your crop image... please wait up to 60 seconds.\nபகுப்பாய்வு செய்கிறோம்...")
+    .then(function() { return getFile(fileId); })
+    .then(function(url) {
+      console.log("Downloading:", url);
+      return downloadImage(url);
+    })
+    .then(function(img) {
+      console.log("Downloaded:", img.size, "bytes, mime:", img.mime);
+      return callGemini(img.b64, img.mime, 3);
     })
     .then(function(resp) {
-      var filePath = resp.data.result.file_path;
-      var fileUrl = "https://api.telegram.org/file/bot" + TOKEN + "/" + filePath;
-      console.log("Downloading:", fileUrl);
-      return axios.get(fileUrl, { responseType: "arraybuffer", timeout: 30000 });
-    })
-    .then(function(imgResp) {
-      console.log("Image downloaded:", imgResp.data.byteLength, "bytes");
-      var b64 = Buffer.from(imgResp.data).toString("base64");
-      var detectedMime = imgResp.headers["content-type"] || mime;
-      return callGemini(b64, detectedMime, 3);
-    })
-    .then(function(resp) {
-      console.log("Gemini success");
+      console.log("Gemini done");
       var raw = resp.data.candidates[0].content.parts[0].text || "";
-      console.log("Raw:", raw.substring(0, 150));
+      console.log("Raw response:", raw.substring(0, 200));
       var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
-      var result = JSON.parse(cleaned);
+      var r = JSON.parse(cleaned);
 
-      var msg1 =
-        "KVK Crop Disease Report\n" +
-        "Disease: " + t(result.disease, 50) + "\n" +
-        "Severity: " + t(result.severity, 20) + "\n" +
-        "Affected: " + t(result.affected_part, 40) + "\n" +
-        "Cause: " + t(result.likely_cause, 20) + "\n\n" +
-        "Reason: " + t(result.root_cause, 300);
+      var m1 = "KVK Crop Disease Report\n" +
+        "Disease: " + trim(r.disease, 50) + "\n" +
+        "Severity: " + trim(r.severity, 20) + "\n" +
+        "Affected: " + trim(r.affected_part, 40) + "\n" +
+        "Cause: " + trim(r.likely_cause, 20) + "\n\n" +
+        "Reason:\n" + trim(r.root_cause, 400);
 
-      var msg2 =
-        "Treatment Options\n\n" +
-        "Chemical: " + t(result.chemical_treatment, 200) + "\n" +
-        "Cost: " + t(result.chemical_cost, 40) + "\n\n" +
-        "Organic: " + t(result.organic_treatment, 200) + "\n" +
-        "Cost: " + t(result.organic_cost, 40) + "\n\n" +
-        "Prevention: " + t(result.prevention, 300);
+      var m2 = "Treatment\n\n" +
+        "Chemical:\n" + trim(r.chemical_treatment, 250) + "\n" +
+        "Cost: " + trim(r.chemical_cost, 50) + "\n\n" +
+        "Organic:\n" + trim(r.organic_treatment, 250) + "\n" +
+        "Cost: " + trim(r.organic_cost, 50) + "\n\n" +
+        "Next Season Prevention:\n" + trim(r.prevention, 300);
 
-      var msg3 =
-        "Tamil Advisory\n\n" +
-        "Noi: " + t(result.tamil_disease, 60) + "\n\n" +
-        "Theervу: " + t(result.tamil_solution, 300) + "\n\n" +
-        "Adhutha Paruvam: " + t(result.tamil_prevention, 200) + "\n\n" +
-        "Echagarikkai: " + t(result.tamil_warning, 200);
+      var m3 = "Tamil Advisory\n\n" +
+        "Noi: " + trim(r.tamil_disease, 80) + "\n\n" +
+        "Theervу:\n" + trim(r.tamil_solution, 350) + "\n\n" +
+        "Adhutha Paruvam:\n" + trim(r.tamil_prevention, 250) + "\n\n" +
+        "Echagarikkai:\n" + trim(r.tamil_warning, 250);
 
-      return sendMessage(chatId, msg1)
-        .then(function() { return delay(1000); })
-        .then(function() { return sendMessage(chatId, msg2); })
-        .then(function() { return delay(1000); })
-        .then(function() { return sendMessage(chatId, msg3); });
+      return sendMsg(chatId, m1)
+        .then(function() { return sleep(1000); })
+        .then(function() { return sendMsg(chatId, m2); })
+        .then(function() { return sleep(1000); })
+        .then(function() { return sendMsg(chatId, m3); });
     })
     .catch(function(err) {
-      console.error("Final error:", err.message);
-      sendMessage(chatId, "Analysis failed. Please send a clearer crop photo and try again.");
+      console.error("handlePhoto error:", err.message);
+      sendMsg(chatId, "Analysis failed. Error: " + err.message + "\nPlease try again.");
     });
-});
+}
 
-var PORT = process.env.PORT || 8080;
-app.listen(PORT, function() {
-  console.log("Bot running on port", PORT);
-  console.log("TOKEN:", TOKEN ? "SET" : "MISSING");
-  console.log("GEMINI:", GEMINI_KEY ? "SET" : "MISSING");
-});
+// Delete any existing webhook before polling
+axios.post(TELEGRAM + "/deleteWebhook")
+  .then(function() {
+    console.log("Webhook deleted. Starting polling...");
+    poll(0);
+  })
+  .catch(function(e) {
+    console.error("deleteWebhook error:", e.message);
+    poll(0);
+  });
+
+function poll(offset) {
+  axios.get(TELEGRAM + "/getUpdates?timeout=30&offset=" + offset)
+    .then(function(resp) {
+      var updates = resp.data.result || [];
+      var nextOffset = offset;
+
+      updates.forEach(function(update) {
+        nextOffset = update.update_id + 1;
+        var msg = update.message;
+        if (!msg) return;
+
+        var chatId = msg.chat.id;
+        console.log("Update from:", chatId);
+
+        if (msg.photo) {
+          var fileId = msg.photo[msg.photo.length - 1].file_id;
+          handlePhoto(chatId, fileId);
+        } else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith("image/")) {
+          handlePhoto(chatId, msg.document.file_id);
+        } else {
+          sendMsg(chatId, "Hello! Send a photo of your diseased crop.\nபயிர் நோய் படத்தை அனுப்பவும்.");
+        }
+      });
+
+      poll(nextOffset);
+    })
+    .catch(function(e) {
+      console.error("Poll error:", e.message);
+      setTimeout(function() { poll(offset); }, 5000);
+    });
+}
