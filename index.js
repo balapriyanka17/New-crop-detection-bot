@@ -4,7 +4,7 @@ process.on("uncaughtException", function(err) { console.error("Uncaught:", err.m
 process.on("unhandledRejection", function(err) { console.error("Unhandled:", err); });
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_KEY = process.env.GEMINI_API_KEY || "AQ.Ab8RN6Lo5jiSiTJc2TjR7FBjYO6EWknwCbC8hdv1wXns81QHEg";
 const TELEGRAM = "https://api.telegram.org/bot" + TOKEN;
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_KEY;
 
