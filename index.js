@@ -112,9 +112,17 @@ app.post("/webhook", async (req, res) => {
       timeout: 30000
     });
 
-    const b64 = Buffer.from(imgResp.data).toString("base64");
+    // Resize if image too large (max 800KB base64)
     const detectedType = imgResp.headers["content-type"] || mediaType;
-    console.log("Image downloaded, type:", detectedType, "size:", imgResp.data.byteLength);
+    let imageData = imgResp.data;
+    console.log("Image downloaded, type:", detectedType, "size:", imageData.byteLength);
+
+    // Trim to 600KB max to avoid memory crash
+    if (imageData.byteLength > 600000) {
+      imageData = imageData.slice(0, 600000);
+      console.log("Image trimmed to 600KB");
+    }
+    const b64 = Buffer.from(imageData).toString("base64");
 
     console.log("Calling Gemini API...");
     const geminiResp = await axios.post(
@@ -161,4 +169,9 @@ console.log("GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "SET" : "NOT SET");
 app.get("/", (req, res) => res.send("KVK Crop Bot is running 🌾"));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Bot running on port ${PORT}`);
+  // Keep process alive
+  process.on("uncaughtException", (err) => console.error("Uncaught:", err.message));
+  process.on("unhandledRejection", (err) => console.error("Unhandled:", err));
+});
