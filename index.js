@@ -49,7 +49,7 @@ function processQueue() {
 
   // Enforce 65 second gap between Gemini calls
   var now = Date.now();
-  var wait = Math.max(0, 65000 - (now - lastGeminiCall));
+  var wait = Math.max(0, 90000 - (now - lastGeminiCall));
   if (wait > 0) {
     console.log("Waiting", wait, "ms before Gemini call...");
   }
