@@ -101,18 +101,25 @@ app.post("/webhook", function(req, res) {
       console.log("Image:", imgResp.data.byteLength, "bytes");
       var b64 = Buffer.from(imgResp.data).toString("base64");
       var mime = imgResp.headers["content-type"] || mediaType;
-      console.log("Calling Gemini...");
-      return axios.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiKey,
-        {
-          contents: [{ parts: [
-            { inline_data: { mime_type: mime, data: b64 } },
-            { text: PROMPT }
-          ]}],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 800 }
-        },
-        { timeout: 55000 }
-      );
+  function callGemini(b64, mime, retries) {
+    return axios.post(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiKey,
+      {
+        contents: [{ parts: [
+          { inline_data: { mime_type: mime, data: b64 } },
+          { text: PROMPT }
+        ]}],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 800 }
+      },
+      { timeout: 55000 }
+    ).catch(function(err) {
+      if (err.response && err.response.status === 429 && retries > 0) {
+        console.log("Rate limited, retrying in 30s...");
+        return delay(30000).then(function() { return callGemini(b64, mime, retries - 1); });
+      }
+      throw err;
+    });
+  }
     })
     .then(function(resp) {
       console.log("Gemini done");
