@@ -100,19 +100,15 @@ function processMessage(body) {
       var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
       var result = JSON.parse(cleaned);
 
-      return send("🌾 Disease: " + result.disease + "\nSeverity: " + result.severity + "\nPart: " + result.affected_part + "\nCause: " + result.likely_cause + "\n\nReason: " + trim(result.root_cause, 120))
-        .then(function() {
-          return new Promise(function(r) { setTimeout(r, 1000); });
-        })
-        .then(function() {
-          return send("🧪 Chemical: " + trim(result.chemical_treatment, 130) + "\nCost: ~" + result.chemical_cost + "/acre\n\n🌿 Organic: " + trim(result.organic_treatment, 130) + "\nCost: ~" + result.organic_cost + "/acre\n\nPrevention: " + trim(result.prevention, 150));
-        })
-        .then(function() {
-          return new Promise(function(r) { setTimeout(r, 1000); });
-        })
-        .then(function() {
-          return send("நோய்: " + result.tamil_disease + "\nதீர்வு: " + trim(result.tamil_solution, 150) + "\nஅடுத்த பருவம்: " + trim(result.tamil_prevention, 100) + "\nஎச்சரிக்கை: " + trim(result.tamil_warning, 100));
-        });
+      var msg1 = "🌾 " + trim(result.disease,30) + " | " + result.severity + "\n" + result.affected_part + " | " + result.likely_cause + "\n" + trim(result.root_cause, 80);
+      var msg2 = "🧪 " + trim(result.chemical_treatment, 80) + " (~" + trim(result.chemical_cost,20) + ")\n🌿 " + trim(result.organic_treatment, 80) + " (~" + trim(result.organic_cost,20) + ")\n🛡 " + trim(result.prevention, 80);
+      var msg3 = "நோய்: " + trim(result.tamil_disease,40) + "\nதீர்வு: " + trim(result.tamil_solution,80) + "\nபருவம்: " + trim(result.tamil_prevention,80) + "\n⚠️ " + trim(result.tamil_warning,80);
+
+      return send(msg1)
+        .then(function() { return new Promise(function(r) { setTimeout(r, 800); }); })
+        .then(function() { return send(msg2); })
+        .then(function() { return new Promise(function(r) { setTimeout(r, 800); }); })
+        .then(function() { return send(msg3); });
     })
     .catch(function(err) {
       console.error("Error:", err.message);
