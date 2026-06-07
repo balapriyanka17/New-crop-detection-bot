@@ -7,8 +7,7 @@ process.on("unhandledRejection", function(err) { console.error("Unhandled:", err
 const app = express();
 app.use(express.json());
 
-
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8971652258:AAEKGzC3Wz8zu9062QuqUSiYdIBdQ_ETlVs";
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const TELEGRAM_API = "https://api.telegram.org/bot" + TOKEN;
 
@@ -43,13 +42,19 @@ function callGemini(b64, mime, retries) {
       ]}],
       generationConfig: { temperature: 0.1, maxOutputTokens: 800 }
     },
-    { timeout: 55000 }
+    { timeout: 120000 }
   ).catch(function(err) {
     var status = err.response ? err.response.status : 0;
     console.error("Gemini error:", status, err.message);
     if (status === 429 && retries > 0) {
-      console.log("Rate limited. Waiting 35 seconds...");
-      return delay(35000).then(function() {
+      console.log("Rate limited. Waiting 60 seconds...");
+      return delay(60000).then(function() {
+        return callGemini(b64, mime, retries - 1);
+      });
+    }
+    if (err.message.includes("timeout") && retries > 0) {
+      console.log("Timeout. Waiting 10 seconds...");
+      return delay(10000).then(function() {
         return callGemini(b64, mime, retries - 1);
       });
     }
