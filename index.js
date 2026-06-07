@@ -16,26 +16,32 @@ Crops: Paddy (blast, sheath blight, brown spot, tungro virus, stem borer), Turme
 Respond ONLY in raw JSON, no markdown, no code fences:
 {"disease":"...","severity":"Early|Moderate|Severe","affected_part":"...","likely_cause":"Fungal|Bacterial|Viral|Pest","root_cause":"...","chemical_treatment":"...","chemical_cost":"INR per acre","organic_treatment":"...","organic_cost":"INR per acre","prevention":"3 tips","tamil_disease":"...","tamil_solution":"...","tamil_prevention":"...","tamil_warning":"..."}`;
 
+function truncate(str, n) {
+  return str && str.length > n ? str.substring(0, n) + "..." : str;
+}
+
 function formatReply(r) {
-  return `🌾 *KVK Crop Disease Report*
-📍 நோய்: ${r.tamil_disease} (${r.disease})
-⚠️ தீவிரம்: ${r.severity} | ${r.affected_part} | ${r.likely_cause}
+  const msg1 = `🌾 *KVK நோய் அறிக்கை*
+நோய்: ${r.disease} (${r.severity})
+பாதிப்பு: ${r.affected_part} | ${r.likely_cause}
+காரணம்: ${truncate(r.root_cause, 120)}`;
 
-🔍 *காரணம்:* ${r.root_cause}
-
-🧪 *Chemical:* ${r.chemical_treatment}
+  const msg2 = `🧪 Chemical: ${truncate(r.chemical_treatment, 120)}
 💰 ~${r.chemical_cost}/acre
 
-🌿 *Organic:* ${r.organic_treatment}
+🌿 Organic: ${truncate(r.organic_treatment, 120)}
 💰 ~${r.organic_cost}/acre
 
-🛡️ *Prevention:* ${r.prevention}
+🛡️ Prevention: ${truncate(r.prevention, 150)}`;
 
-🗣️ *Tamil Advisory*
-தீர்வு: ${r.tamil_solution}
-அடுத்த பருவம்: ${r.tamil_prevention}
-⚠️ எச்சரிக்கை: ${r.tamil_warning}
+  const msg3 = `🗣️ Tamil Advisory
+நோய்: ${r.tamil_disease}
+தீர்வு: ${truncate(r.tamil_solution, 150)}
+அடுத்த பருவம்: ${truncate(r.tamil_prevention, 100)}
+⚠️ ${truncate(r.tamil_warning, 100)}
 _KVK Salem · Mettur · Attur_`;
+
+  return [msg1, msg2, msg3];
 }
 
 app.get("/", (req, res) => {
