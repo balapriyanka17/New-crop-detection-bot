@@ -4,15 +4,14 @@ process.on("uncaughtException", function(err) { console.error("Uncaught:", err.m
 process.on("unhandledRejection", function(err) { console.error("Unhandled:", err); });
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const GEMINI_KEY = process.env.GEMINI_API_KEY || "AQ.Ab8RN6Lo5jiSiTJc2TjR7FBjYO6EWknwCbC8hdv1wXns81QHEg";
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY || "";
 const TELEGRAM = "https://api.telegram.org/bot" + TOKEN;
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + GEMINI_KEY;
 
 console.log("Starting KVK Bot...");
 console.log("TOKEN:", TOKEN ? "SET" : "MISSING");
-console.log("GEMINI:", GEMINI_KEY ? "SET" : "MISSING");
+console.log("OPENROUTER:", OPENROUTER_KEY ? "SET" : "MISSING");
 
-const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur. Analyse this crop image. Reply ONLY as a raw JSON object with these exact fields: disease, severity (Early or Moderate or Severe), affected_part, likely_cause (Fungal or Bacterial or Viral or Pest), root_cause, chemical_treatment, chemical_cost, organic_treatment, organic_cost, prevention, tamil_disease, tamil_solution, tamil_prevention, tamil_warning. No markdown. No code fences. Just the JSON.";
+const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur. Analyse this crop image. Reply ONLY as a raw JSON object with no markdown and no code fences: {\"disease\":\"\",\"severity\":\"Early or Moderate or Severe\",\"affected_part\":\"\",\"likely_cause\":\"Fungal or Bacterial or Viral or Pest\",\"root_cause\":\"\",\"chemical_treatment\":\"\",\"chemical_cost\":\"\",\"organic_treatment\":\"\",\"organic_cost\":\"\",\"prevention\":\"\",\"tamil_disease\":\"\",\"tamil_solution\":\"\",\"tamil_prevention\":\"\",\"tamil_warning\":\"\"}";
 
 var queue = [];
 var processing = false;
@@ -34,24 +33,39 @@ function sendMsg(chatId, text) {
   }).catch(function(e) { console.error("sendMsg error:", e.message); });
 }
 
-function callGemini(b64, mime, tries) {
-  console.log("Calling Gemini, tries left:", tries);
-  return axios.post(GEMINI_URL, {
-    contents: [{ parts: [
-      { inline_data: { mime_type: mime, data: b64 } },
-      { text: PROMPT }
-    ]}],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
-  }, { timeout: 60000 })
-  .catch(function(err) {
+function callOpenRouter(b64, mime, tries) {
+  console.log("Calling OpenRouter, tries left:", tries);
+  return axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model: "google/gemini-2.0-flash-exp:free",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: "data:" + mime + ";base64," + b64 } },
+          { type: "text", text: PROMPT }
+        ]
+      }],
+      max_tokens: 1024
+    },
+    {
+      headers: {
+        "Authorization": "Bearer " + OPENROUTER_KEY,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://kvk-crop-bot.railway.app",
+        "X-Title": "KVK Crop Bot"
+      },
+      timeout: 60000
+    }
+  ).catch(function(err) {
     var code = err.response ? err.response.status : 0;
     var msg = err.response ? JSON.stringify(err.response.data) : err.message;
-    console.error("Gemini error", code, ":", msg.substring(0, 200));
+    console.error("OpenRouter error", code, ":", msg.substring(0, 200));
     if ((code === 429 || code === 503) && tries > 0) {
-      console.log("Waiting 90s before retry...");
-      return sleep(90000).then(function() { return callGemini(b64, mime, tries - 1); });
+      console.log("Rate limit. Waiting 30s...");
+      return sleep(30000).then(function() { return callOpenRouter(b64, mime, tries - 1); });
     }
-    throw new Error("Gemini failed: " + code + " " + msg.substring(0, 100));
+    throw new Error("OpenRouter failed: " + code + " " + msg.substring(0, 100));
   });
 }
 
@@ -71,12 +85,12 @@ function processNext() {
       var mime = imgResp.headers["content-type"] || "image/jpeg";
       if (mime === "application/octet-stream") mime = "image/jpeg";
       var b64 = Buffer.from(imgResp.data).toString("base64");
-      console.log("Image ready:", imgResp.data.byteLength, "bytes, mime:", mime);
-      return callGemini(b64, mime, 5);
+      console.log("Image ready:", imgResp.data.byteLength, "bytes");
+      return callOpenRouter(b64, mime, 3);
     })
     .then(function(resp) {
-      var raw = resp.data.candidates[0].content.parts[0].text || "";
-      console.log("Gemini raw:", raw.substring(0, 200));
+      var raw = resp.data.choices[0].message.content || "";
+      console.log("Response:", raw.substring(0, 200));
       var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
       var r = JSON.parse(cleaned);
 
@@ -111,14 +125,11 @@ function processNext() {
     })
     .catch(function(err) {
       console.error("Job failed:", err.message);
-      sendMsg(job.chatId, "Analysis failed: " + err.message.substring(0, 100) + "\n\nPlease wait 2 minutes and try again.");
+      sendMsg(job.chatId, "Analysis failed: " + err.message.substring(0, 150) + "\n\nPlease try again.");
     })
     .then(function() {
       processing = false;
-      if (queue.length > 0) {
-        console.log("Next job in 90 seconds...");
-        sleep(90000).then(processNext);
-      }
+      processNext();
     });
 }
 
@@ -135,8 +146,8 @@ function poll(offset) {
         if (msg.photo) {
           var fileId = msg.photo[msg.photo.length - 1].file_id;
           queue.push({ chatId: chatId, fileId: fileId });
-          console.log("Photo queued from:", chatId, "| Queue:", queue.length);
-          sendMsg(chatId, "Photo received! Analysing now...\nபடம் பெறப்பட்டது! பகுப்பாய்வு செய்கிறோம்...");
+          console.log("Photo queued from:", chatId);
+          sendMsg(chatId, "Photo received! Analysing now...\nபடம் பெறப்பட்டது!");
           processNext();
         } else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith("image/")) {
           queue.push({ chatId: chatId, fileId: msg.document.file_id });
