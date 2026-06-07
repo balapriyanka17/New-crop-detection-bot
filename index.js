@@ -124,9 +124,9 @@ function processQueue() {
 axios.post(TELEGRAM + "/deleteWebhook?drop_pending_updates=true")
   .then(function() {
     console.log("Webhook deleted. Starting polling...");
-    poll(0);
+    setTimeout(function() { poll(0); }, 3000);
   })
-  .catch(function() { poll(0); });
+  .catch(function() { setTimeout(function() { poll(0); }, 3000); });
 
 function poll(offset) {
   axios.get(TELEGRAM + "/getUpdates?timeout=30&offset=" + offset)
@@ -158,6 +158,7 @@ function poll(offset) {
     })
     .catch(function(e) {
       console.error("Poll error:", e.message);
-      setTimeout(function() { poll(offset); }, 5000);
+      var retryDelay = e.response && e.response.status === 409 ? 10000 : 5000;
+      setTimeout(function() { poll(offset); }, retryDelay);
     });
 }
