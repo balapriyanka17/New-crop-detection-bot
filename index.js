@@ -1,15 +1,15 @@
 const express = require("express");
 const axios = require("axios");
-const twilio = require("twilio");
 
 process.on("uncaughtException", function(err) { console.error("Uncaught:", err.message); });
 process.on("unhandledRejection", function(err) { console.error("Unhandled:", err); });
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const SANDBOX_NUMBER = "whatsapp:+14155238886";
+const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const TELEGRAM_API = "https://api.telegram.org/bot" + TOKEN;
 
 const PROMPT = "You are a crop disease expert for Tamil Nadu KVK Salem/Mettur/Attur. Analyse the crop image. Reply ONLY in raw JSON (no markdown, no code fences): {\"disease\":\"\",\"severity\":\"Early|Moderate|Severe\",\"affected_part\":\"\",\"likely_cause\":\"Fungal|Bacterial|Viral|Pest\",\"root_cause\":\"\",\"chemical_treatment\":\"\",\"chemical_cost\":\"\",\"organic_treatment\":\"\",\"organic_cost\":\"\",\"prevention\":\"\",\"tamil_disease\":\"\",\"tamil_solution\":\"\",\"tamil_prevention\":\"\",\"tamil_warning\":\"\"}";
 
@@ -23,10 +23,18 @@ function delay(ms) {
   return new Promise(function(r) { setTimeout(r, ms); });
 }
 
-function callGemini(b64, mime, geminiKey, retries) {
+function sendMessage(chatId, text) {
+  console.log("Sending to", chatId, "length:", text.length);
+  return axios.post(TELEGRAM_API + "/sendMessage", {
+    chat_id: chatId,
+    text: text
+  }).catch(function(e) { console.error("Send error:", e.message); });
+}
+
+function callGemini(b64, mime, retries) {
   console.log("Calling Gemini, retries left:", retries);
   return axios.post(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiKey,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_KEY,
     {
       contents: [{ parts: [
         { inline_data: { mime_type: mime, data: b64 } },
@@ -37,11 +45,11 @@ function callGemini(b64, mime, geminiKey, retries) {
     { timeout: 55000 }
   ).catch(function(err) {
     var status = err.response ? err.response.status : 0;
-    console.error("Gemini error status:", status);
+    console.error("Gemini error:", status, err.message);
     if (status === 429 && retries > 0) {
-      console.log("Rate limited. Waiting 35 seconds before retry...");
+      console.log("Rate limited. Waiting 35 seconds...");
       return delay(35000).then(function() {
-        return callGemini(b64, mime, geminiKey, retries - 1);
+        return callGemini(b64, mime, retries - 1);
       });
     }
     throw err;
@@ -53,43 +61,48 @@ app.get("/", function(req, res) {
 });
 
 app.post("/webhook", function(req, res) {
-  console.log("Webhook received");
-  res.set("Content-Type", "text/xml");
-  res.send("<Response></Response>");
+  res.sendStatus(200);
+  var update = req.body;
+  var msg = update.message;
+  if (!msg) return;
 
-  var from = req.body.From;
-  var mediaUrl = req.body.MediaUrl0;
-  var mediaType = req.body.MediaContentType0 || "image/jpeg";
-  var sid = process.env.TWILIO_ACCOUNT_SID;
-  var token = process.env.TWILIO_AUTH_TOKEN;
-  var geminiKey = process.env.GEMINI_API_KEY;
+  var chatId = msg.chat.id;
+  var photo = msg.photo;
+  var document = msg.document;
 
-  var client = twilio(sid, token);
+  console.log("Message from:", chatId);
 
-  function send(text) {
-    var safe = text.substring(0, 1500);
-    console.log("Sending msg, length:", safe.length);
-    return client.messages.create({ from: SANDBOX_NUMBER, to: from, body: safe });
-  }
-
-  if (!mediaUrl) {
-    send("Hello! Send a photo of your diseased crop.\nபயிர் நோய் படத்தை அனுப்பவும்.");
+  // No image sent
+  if (!photo && !document) {
+    sendMessage(chatId, "Hello! Send a photo of your diseased crop for analysis.\nபயிர் நோய் படத்தை அனுப்பவும்.");
     return;
   }
 
-  send("Analysing crop... please wait up to 60 seconds.")
+  // Get file_id — use highest resolution photo
+  var fileId;
+  var mime = "image/jpeg";
+  if (photo) {
+    fileId = photo[photo.length - 1].file_id;
+  } else {
+    fileId = document.file_id;
+    mime = document.mime_type || "image/jpeg";
+  }
+
+  sendMessage(chatId, "Analysing your crop image... please wait up to 60 seconds.\nபகுப்பாய்வு செய்கிறோம்...")
     .then(function() {
-      return axios.get(mediaUrl, {
-        auth: { username: sid, password: token },
-        responseType: "arraybuffer",
-        timeout: 30000
-      });
+      // Get file path from Telegram
+      return axios.get(TELEGRAM_API + "/getFile?file_id=" + fileId);
+    })
+    .then(function(resp) {
+      var filePath = resp.data.result.file_path;
+      var fileUrl = "https://api.telegram.org/file/bot" + TOKEN + "/" + filePath;
+      console.log("Downloading:", fileUrl);
+      return axios.get(fileUrl, { responseType: "arraybuffer", timeout: 30000 });
     })
     .then(function(imgResp) {
       console.log("Image downloaded:", imgResp.data.byteLength, "bytes");
       var b64 = Buffer.from(imgResp.data).toString("base64");
-      var mime = imgResp.headers["content-type"] || mediaType;
-      return callGemini(b64, mime, geminiKey, 3);
+      return callGemini(b64, mime, 3);
     })
     .then(function(resp) {
       console.log("Gemini success");
@@ -98,26 +111,44 @@ app.post("/webhook", function(req, res) {
       var cleaned = raw.replace(/```json/g, "").replace(/```/g, "").trim();
       var result = JSON.parse(cleaned);
 
-      var msg1 = "KVK Report\nDisease: " + t(result.disease, 40) + "\nSeverity: " + t(result.severity, 20) + "\nPart: " + t(result.affected_part, 30) + "\nCause: " + t(result.likely_cause, 20) + "\nReason: " + t(result.root_cause, 150);
-      var msg2 = "Treatment\nChemical: " + t(result.chemical_treatment, 150) + "\nCost: " + t(result.chemical_cost, 30) + "\nOrganic: " + t(result.organic_treatment, 150) + "\nCost: " + t(result.organic_cost, 30) + "\nPrevention: " + t(result.prevention, 150);
-      var msg3 = "Tamil Advisory\nNoi: " + t(result.tamil_disease, 50) + "\nTheervу: " + t(result.tamil_solution, 150) + "\nWarning: " + t(result.tamil_warning, 100);
+      var msg1 =
+        "KVK Crop Disease Report\n" +
+        "Disease: " + t(result.disease, 40) + "\n" +
+        "Severity: " + t(result.severity, 20) + "\n" +
+        "Affected: " + t(result.affected_part, 30) + "\n" +
+        "Cause: " + t(result.likely_cause, 20) + "\n" +
+        "Reason: " + t(result.root_cause, 200);
 
-      return send(msg1)
-        .then(function() { return delay(1200); })
-        .then(function() { return send(msg2); })
-        .then(function() { return delay(1200); })
-        .then(function() { return send(msg3); });
+      var msg2 =
+        "Treatment\n" +
+        "Chemical: " + t(result.chemical_treatment, 150) + "\n" +
+        "Cost: " + t(result.chemical_cost, 30) + "\n\n" +
+        "Organic: " + t(result.organic_treatment, 150) + "\n" +
+        "Cost: " + t(result.organic_cost, 30) + "\n\n" +
+        "Prevention: " + t(result.prevention, 200);
+
+      var msg3 =
+        "Tamil Advisory\n" +
+        "Noi: " + t(result.tamil_disease, 50) + "\n" +
+        "Theervу: " + t(result.tamil_solution, 200) + "\n" +
+        "Adhutha Paruvam: " + t(result.tamil_prevention, 150) + "\n" +
+        "Echagarikkai: " + t(result.tamil_warning, 150);
+
+      return sendMessage(chatId, msg1)
+        .then(function() { return delay(1000); })
+        .then(function() { return sendMessage(chatId, msg2); })
+        .then(function() { return delay(1000); })
+        .then(function() { return sendMessage(chatId, msg3); });
     })
     .catch(function(err) {
       console.error("Final error:", err.message);
-      send("Analysis failed. Please try again in 1 minute.");
+      sendMessage(chatId, "Analysis failed. Please send a clearer crop photo and try again.");
     });
 });
 
 var PORT = process.env.PORT || 8080;
 app.listen(PORT, function() {
   console.log("Bot running on port", PORT);
-  console.log("SID:", process.env.TWILIO_ACCOUNT_SID ? "SET" : "MISSING");
-  console.log("TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "SET" : "MISSING");
-  console.log("GEMINI:", process.env.GEMINI_API_KEY ? "SET" : "MISSING");
+  console.log("TOKEN:", TOKEN ? "SET" : "MISSING");
+  console.log("GEMINI:", GEMINI_KEY ? "SET" : "MISSING");
 });
